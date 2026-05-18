@@ -11,7 +11,7 @@ from flask import Flask, request
 # =========================
 # 🔑 TOKEN
 # =========================
-BOT_TOKEN = os.getenv "8809308845:AAFp5VJAXQ2DsRIICw2p3s7BaeRIIoluUTg"  # <-- Render lo prende da Environment
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # <-- Render lo prende da Environment
 
 # =========================
 # ⚙️ PARAMETRI BASE
