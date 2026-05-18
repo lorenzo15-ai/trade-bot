@@ -1,65 +1,116 @@
 import logging
+import requests
+import numpy as np
+import random
+import os
 from datetime import datetime, time
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-import random
-import os
 
+# =========================
 # 🔑 TOKEN
-# Per Render è meglio usare:
-# BOT_TOKEN = os.getenv("BOT_TOKEN")
-# Se vuoi tenerlo fisso in locale:
+# =========================
 BOT_TOKEN = "8809308845:AAFp5VJAXQ2DsRIICw2p3s7BaeRIIoluUTg"
 
-# ⚙️ PARAMETRI BASE PER XAUUSD
-PIP_SIZE = 0.10              # 0.10 = 1 pip oro
-PIP_VALUE_PER_LOT = 1.0      # 1 pip per 1 lotto ≈ 1$
+# =========================
+# ⚙️ PARAMETRI BASE
+# =========================
+PIP_SIZE = 0.10
+PIP_VALUE_PER_LOT = 1.0
 DEFAULT_BALANCE = 1000
 DEFAULT_RISK_PCT = 1.0
 TIMEFRAME = "M5"
 AUTO_INTERVAL = 300  # 5 minuti
 
+# =========================
 # LOGGING
+# =========================
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
 
+# =========================
+# STORICO PREZZI REALI
+# =========================
+storico = []
 
 # =========================
-# LOGICA MERCATO
+# 📡 PREZZO REALE DA BINANCE
 # =========================
-def stato_mercato():
-    ora = datetime.utcnow().time()
-    giorno = datetime.utcnow().weekday()
-
-    # Sabato e domenica chiuso
-    if giorno == 5 or giorno == 6:
-        return "chiuso"
-
-    # Venerdì sera chiusura
-    if giorno == 4 and ora >= time(23, 0):
-        return "chiuso"
-
-    return "aperto"
-
-
-def descrizione_sessione():
-    ora = datetime.utcnow().time()
-
-    if time(0, 0) <= ora <= time(9, 0):
-        return "🇯🇵 Tokyo — oro più calmo"
-    if time(7, 0) <= ora <= time(16, 0):
-        return "🇬🇧 Londra — buona volatilità su XAUUSD"
-    if time(12, 30) <= ora <= time(21, 0):
-        return "🇺🇸 New York — oro molto volatile"
-
-    return "📊 Sessione normale su XAUUSD"
-
+def prezzo_reale():
+    try:
+        url = "https://api.binance.com/api/v3/ticker/price?symbol=XAUUSDT"
+        data = requests.get(url).json()
+        return float(data["price"])
+    except:
+        return None
 
 # =========================
-# SENTIMENT
+# 📊 INDICATORI REALI
+# =========================
+def ema(values, period):
+    if len(values) < period:
+        return None
+    return np.mean(values[-period:])
+
+def rsi(values, period=14):
+    if len(values) < period:
+        return None
+    deltas = np.diff(values)
+    up = deltas[deltas > 0].sum() / period
+    down = -deltas[deltas < 0].sum() / period
+    if down == 0:
+        return 100
+    rs = up / down
+    return 100 - (100 / (1 + rs))
+
+def macd(values):
+    if len(values) < 26:
+        return None
+    ema12 = ema(values, 12)
+    ema26 = ema(values, 26)
+    return ema12 - ema26
+
+# =========================
+# 📈 TREND + INDICATORI REALI
+# =========================
+def genera_indicatori():
+    prezzo = prezzo_reale()
+    if prezzo is None:
+        prezzo = random.uniform(2300, 2600)
+
+    storico.append(prezzo)
+
+    ema20 = ema(storico, 20)
+    ema50 = ema(storico, 50)
+    rsi_val = rsi(storico)
+    macd_val = macd(storico)
+
+    # Trend basato su EMA reali
+    if ema20 and ema50:
+        if ema20 > ema50:
+            trend = "uptrend"
+        elif ema20 < ema50:
+            trend = "downtrend"
+        else:
+            trend = "range"
+    else:
+        trend = "range"
+
+    return {
+        "trend_m5": trend,
+        "trend_m15": trend,
+        "trend_h1": trend,
+        "ema20": round(ema20, 2) if ema20 else None,
+        "ema50": round(ema50, 2) if ema50 else None,
+        "rsi": round(rsi_val, 2) if rsi_val else None,
+        "macd": round(macd_val, 2) if macd_val else None
+    }
+
+# =========================
+# 🧠 SENTIMENT
 # =========================
 def leggi_sentiment():
     scelta = random.choices(
@@ -70,34 +121,33 @@ def leggi_sentiment():
     confidence = random.randint(60, 95)
     return scelta, confidence
 
+# =========================
+# 🕒 MERCATO
+# =========================
+def stato_mercato():
+    ora = datetime.utcnow().time()
+    giorno = datetime.utcnow().weekday()
+
+    if giorno == 5 or giorno == 6:
+        return "chiuso"
+    if giorno == 4 and ora >= time(23, 0):
+        return "chiuso"
+    return "aperto"
+
+def descrizione_sessione():
+    ora = datetime.utcnow().time()
+
+    if time(0, 0) <= ora <= time(9, 0):
+        return "🇯🇵 Tokyo — oro più calmo"
+    if time(7, 0) <= ora <= time(16, 0):
+        return "🇬🇧 Londra — buona volatilità"
+    if time(12, 30) <= ora <= time(21, 0):
+        return "🇺🇸 New York — oro molto volatile"
+
+    return "📊 Sessione normale"
 
 # =========================
-# INDICATORI E TREND (XAUUSD)
-# =========================
-def genera_indicatori():
-    trend_m5 = random.choice(["uptrend", "downtrend", "range"])
-    trend_m15 = random.choice(["uptrend", "downtrend", "range"])
-    trend_h1 = random.choice(["uptrend", "downtrend", "range"])
-
-    # Prezzi oro in zona 2300–2600
-    ema20 = round(random.uniform(2300.0, 2600.0), 2)
-    ema50 = round(random.uniform(2300.0, 2600.0), 2)
-    rsi = random.randint(20, 80)
-    macd = round(random.uniform(-5.0, 5.0), 2)
-
-    return {
-        "trend_m5": trend_m5,
-        "trend_m15": trend_m15,
-        "trend_h1": trend_h1,
-        "ema20": ema20,
-        "ema50": ema50,
-        "rsi": rsi,
-        "macd": macd
-    }
-
-
-# =========================
-# ANALISI AI COMPLETA
+# 🤖 ANALISI AI
 # =========================
 def analisi_ai_completa(s):
     direzione = s["direction"]
@@ -107,67 +157,49 @@ def analisi_ai_completa(s):
 
     # TREND
     if ind["trend_m5"] == ind["trend_m15"] == ind["trend_h1"]:
-        commenti.append("📈 I trend multi‑timeframe sono allineati, buona conferma di direzione.")
+        commenti.append("📈 Trend multi‑timeframe allineati.")
     else:
-        commenti.append("⚠️ I trend non sono completamente allineati, possibile volatilità.")
+        commenti.append("⚠️ Trend non allineati.")
 
     # EMA
     if ind["ema20"] > ind["ema50"] and direzione == "BUY":
-        commenti.append("📊 Le EMA supportano il BUY (EMA20 sopra EMA50).")
+        commenti.append("📊 EMA supportano BUY.")
     elif ind["ema20"] < ind["ema50"] and direzione == "SELL":
-        commenti.append("📉 Le EMA supportano il SELL (EMA20 sotto EMA50).")
+        commenti.append("📉 EMA supportano SELL.")
     else:
-        commenti.append("⚠️ Le EMA non confermano pienamente la direzione.")
+        commenti.append("⚠️ EMA non confermano.")
 
     # RSI
     if ind["rsi"] < 30 and direzione == "BUY":
-        commenti.append("🟢 RSI in ipervenduto: possibile rimbalzo favorevole al BUY.")
+        commenti.append("🟢 RSI ipervenduto → BUY.")
     elif ind["rsi"] > 70 and direzione == "SELL":
-        commenti.append("🔴 RSI in ipercomprato: possibile correzione favorevole al SELL.")
+        commenti.append("🔴 RSI ipercomprato → SELL.")
     else:
-        commenti.append("ℹ️ RSI neutro, non dà segnali forti.")
+        commenti.append("ℹ️ RSI neutro.")
 
     # MACD
     if ind["macd"] > 0 and direzione == "BUY":
-        commenti.append("📈 MACD positivo: momentum rialzista.")
+        commenti.append("📈 MACD rialzista.")
     elif ind["macd"] < 0 and direzione == "SELL":
-        commenti.append("📉 MACD negativo: momentum ribassista.")
+        commenti.append("📉 MACD ribassista.")
     else:
-        commenti.append("⚠️ MACD non conferma la direzione.")
+        commenti.append("⚠️ MACD non conferma.")
 
-    # SL/TP
-    rr = s["rr"]
-    if rr >= 2:
-        commenti.append("💰 Ottimo rapporto R:R, configurazione profittevole.")
-    elif rr >= 1:
-        commenti.append("📊 R:R accettabile.")
-    else:
-        commenti.append("⚠️ R:R sfavorevole, rischio alto.")
-
-    # SENTIMENT
-    if s["sentiment"] == "bullish" and direzione == "BUY":
-        commenti.append("🧠 Il sentiment supporta il BUY.")
-    elif s["sentiment"] == "bearish" and direzione == "SELL":
-        commenti.append("🧠 Il sentiment supporta il SELL.")
-    else:
-        commenti.append("⚠️ Il sentiment non è allineato alla direzione.")
-
-    # RISULTATO FINALE
+    # RISULTATO
     num_warning = len([c for c in commenti if c.startswith("⚠️")])
     num_pos = len([c for c in commenti if c.startswith("📈") or c.startswith("📊") or c.startswith("🟢")])
 
     if num_warning >= 3:
-        finale = "❌ Analisi AI: segnale debole, indicatori contrastanti."
+        finale = "❌ Segnale debole."
     elif num_pos >= 3:
-        finale = "✅ Analisi AI: segnale forte, indicatori ben allineati."
+        finale = "✅ Segnale forte."
     else:
-        finale = "➖ Analisi AI: segnale neutro, alcuni indicatori concordano."
+        finale = "➖ Segnale neutro."
 
     return "\n".join(commenti) + "\n\n" + finale
 
-
 # =========================
-# GENERATORE SEGNALI XAUUSD
+# 🎯 GENERATORE SEGNALI
 # =========================
 def genera_segnale():
     sentiment, confidence = leggi_sentiment()
@@ -176,48 +208,36 @@ def genera_segnale():
     score_buy = 0
     score_sell = 0
 
-    # Trend influence
+    # Trend
     if ind["trend_m5"] == "uptrend": score_buy += 2
     if ind["trend_m5"] == "downtrend": score_sell += 2
 
-    if ind["trend_m15"] == "uptrend": score_buy += 1
-    if ind["trend_m15"] == "downtrend": score_sell += 1
-
-    if ind["trend_h1"] == "uptrend": score_buy += 1
-    if ind["trend_h1"] == "downtrend": score_sell += 1
-
-    # EMA influence
+    # EMA
     if ind["ema20"] > ind["ema50"]:
         score_buy += 2
     else:
         score_sell += 2
 
-    # RSI influence
-    if ind["rsi"] < 30:
-        score_buy += 1
-    if ind["rsi"] > 70:
-        score_sell += 1
+    # RSI
+    if ind["rsi"] < 30: score_buy += 1
+    if ind["rsi"] > 70: score_sell += 1
 
-    # MACD influence
-    if ind["macd"] > 0:
-        score_buy += 1
-    else:
-        score_sell += 1
+    # MACD
+    if ind["macd"] > 0: score_buy += 1
+    else: score_sell += 1
 
-    # Sentiment influence
-    if sentiment == "bullish":
-        score_buy += 2
-    if sentiment == "bearish":
-        score_sell += 2
+    # Sentiment
+    if sentiment == "bullish": score_buy += 2
+    if sentiment == "bearish": score_sell += 2
 
     direction = "BUY" if score_buy > score_sell else "SELL"
 
-    # Entry oro in zona 2300–2600
-    entry = round(random.uniform(2300.0, 2600.0), 2)
+    entry = prezzo_reale()
+    if entry is None:
+        entry = random.uniform(2300, 2600)
 
-    # SL/TP in pip oro (0.10 = 1 pip)
-    sl_pips = 200   # 200 pip = 20.0$
-    tp_pips = 400   # 400 pip = 40.0$
+    sl_pips = 200
+    tp_pips = 400
 
     if direction == "BUY":
         sl = round(entry - sl_pips * PIP_SIZE, 2)
@@ -255,74 +275,54 @@ def genera_segnale():
         "ai": analisi
     }
 
-
 # =========================
 # /start
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🔥 Benvenuto nel BOT TRADING XAUUSD (ORO) 🔥\n\n"
-        f"Strumento: *XAUUSD*\n"
-        f"Timeframe: *{TIMEFRAME}*\n"
-        "Size: 1 lotto ≈ 1$/pip (0.10)\n"
-        f"Rischio: {DEFAULT_RISK_PCT}% su {DEFAULT_BALANCE}€\n\n"
+        "🔥 BOT XAUUSD con DATI REALI 🔥\n\n"
         "Comandi:\n"
-        "• /auto → segnali automatici ogni 5 minuti 🚀\n"
-        "• /stop → ferma i segnali 🛑\n"
-        "• /calc → segnale immediato 🎯\n"
-        "• /auto_ai → segnali automatici con analisi AI 🤖\n"
-        "• /calc_ai → analisi AI immediata 🤖"
-    , parse_mode="Markdown")
-
+        "• /auto → segnali automatici\n"
+        "• /stop → stop segnali\n"
+        "• /calc → segnale immediato\n"
+        "• /auto_ai → segnali AI\n"
+        "• /calc_ai → analisi AI"
+    )
 
 # =========================
-# /auto (normale)
+# /auto
 # =========================
 async def auto_job(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
-    stato = stato_mercato()
-
-    if stato == "chiuso":
-        await context.bot.send_message(chat_id, "📉 Mercato chiuso su XAUUSD.")
+    if stato_mercato() == "chiuso":
+        await context.bot.send_message(chat_id, "📉 Mercato chiuso.")
         return
 
     descr = descrizione_sessione()
     s = genera_segnale()
 
     testo = (
-        "📡 *Segnale AUTO* (XAUUSD M5)\n"
+        "📡 *AUTO SIGNAL* (XAUUSD)\n"
         f"{descr}\n\n"
-        f"🧠 Sentiment: *{s['sentiment']}* ({s['confidence']}%)\n"
-        f"📌 Direzione: *{s['direction']}* su *{s['symbol']}*\n\n"
-        f"📈 EMA20: {s['ind']['ema20']}\n"
-        f"📉 EMA50: {s['ind']['ema50']}\n"
-        f"📊 RSI: {s['ind']['rsi']}\n"
-        f"📉 MACD: {s['ind']['macd']}\n\n"
-        f"🕒 Trend M5: {s['ind']['trend_m5']}\n"
-        f"🕒 Trend M15: {s['ind']['trend_m15']}\n"
-        f"🕒 Trend H1: {s['ind']['trend_h1']}\n\n"
-        f"➡️ Entry: *{s['entry']}*\n"
-        f"🛑 SL: *{s['sl']}* ({s['sl_pips']} pip)\n"
-        f"🎯 TP: *{s['tp']}* ({s['tp_pips']} pip)\n\n"
-        f"💰 Rischio: *{s['rischio']:.2f} €*\n"
-        f"📊 Size: *{s['size']:.2f} lotti*\n"
-        f"⚖️ R:R = *{s['rr']:.2f}*"
+        f"Direzione: *{s['direction']}*\n"
+        f"Entry: *{s['entry']}*\n"
+        f"SL: *{s['sl']}*\n"
+        f"TP: *{s['tp']}*\n\n"
+        f"EMA20: {s['ind']['ema20']}\n"
+        f"EMA50: {s['ind']['ema50']}\n"
+        f"RSI: {s['ind']['rsi']}\n"
+        f"MACD: {s['ind']['macd']}\n"
     )
 
     await context.bot.send_message(chat_id, testo, parse_mode="Markdown")
 
-
 async def auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
-
     for job in context.job_queue.jobs():
         if job.chat_id == chat_id:
             job.schedule_removal()
-
     context.job_queue.run_repeating(auto_job, interval=AUTO_INTERVAL, first=1, chat_id=chat_id)
-
-    await update.message.reply_text("🚀 Auto-segnali XAUUSD attivati! Ogni 5 minuti riceverai un segnale.")
-
+    await update.message.reply_text("🚀 Auto-segnali attivati!")
 
 # =========================
 # /stop
@@ -332,124 +332,88 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for job in context.job_queue.jobs():
         if job.chat_id == chat_id:
             job.schedule_removal()
-
-    await update.message.reply_text("🛑 Auto-segnali XAUUSD fermati.")
-
+    await update.message.reply_text("🛑 Auto-segnali fermati.")
 
 # =========================
-# /calc (normale)
+# /calc
 # =========================
 async def calc(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    stato = stato_mercato()
-
-    if stato == "chiuso":
-        await update.message.reply_text("📉 Mercato chiuso su XAUUSD.")
+    if stato_mercato() == "chiuso":
+        await update.message.reply_text("📉 Mercato chiuso.")
         return
 
     descr = descrizione_sessione()
     s = genera_segnale()
 
     testo = (
-        "🎯 *Segnale MANUALE* (XAUUSD M5)\n"
+        "🎯 *Segnale MANUALE*\n"
         f"{descr}\n\n"
-        f"🧠 Sentiment: *{s['sentiment']}* ({s['confidence']}%)\n"
-        f"📌 Direzione: *{s['direction']}* su *{s['symbol']}*\n\n"
-        f"📈 EMA20: {s['ind']['ema20']}\n"
-        f"📉 EMA50: {s['ind']['ema50']}\n"
-        f"📊 RSI: {s['ind']['rsi']}\n"
-        f"📉 MACD: {s['ind']['macd']}\n\n"
-        f"🕒 Trend M5: {s['ind']['trend_m5']}\n"
-        f"🕒 Trend M15: {s['ind']['trend_m15']}\n"
-        f"🕒 Trend H1: {s['ind']['trend_h1']}\n\n"
-        f"➡️ Entry: *{s['entry']}*\n"
-        f"🛑 SL: *{s['sl']}* ({s['sl_pips']} pip)\n"
-        f"🎯 TP: *{s['tp']}* ({s['tp_pips']} pip)\n\n"
-        f"💰 Rischio: *{s['rischio']:.2f} €*\n"
-        f"📊 Size: *{s['size']:.2f} lotti*\n"
-        f"⚖️ R:R = *{s['rr']:.2f}*"
+        f"Direzione: *{s['direction']}*\n"
+        f"Entry: *{s['entry']}*\n"
+        f"SL: *{s['sl']}*\n"
+        f"TP: *{s['tp']}*\n\n"
+        f"EMA20: {s['ind']['ema20']}\n"
+        f"EMA50: {s['ind']['ema50']}\n"
+        f"RSI: {s['ind']['rsi']}\n"
+        f"MACD: {s['ind']['macd']}\n"
     )
 
     await update.message.reply_text(testo, parse_mode="Markdown")
-
 
 # =========================
 # /calc_ai
 # =========================
 async def calc_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    stato = stato_mercato()
-
-    if stato == "chiuso":
-        await update.message.reply_text("📉 Mercato chiuso su XAUUSD.")
+    if stato_mercato() == "chiuso":
+        await update.message.reply_text("📉 Mercato chiuso.")
         return
 
     descr = descrizione_sessione()
     s = genera_segnale()
 
     testo = (
-        "🤖 *AI ANALYSIS* (XAUUSD M5)\n"
+        "🤖 *AI ANALYSIS*\n"
         f"{descr}\n\n"
-        f"📌 Direzione: *{s['direction']}* su *{s['symbol']}*\n"
-        f"➡️ Entry: *{s['entry']}*\n"
-        f"🛑 SL: *{s['sl']}* ({s['sl_pips']} pip)\n"
-        f"🎯 TP: *{s['tp']}* ({s['tp_pips']} pip)\n\n"
-        f"📈 EMA20: {s['ind']['ema20']}\n"
-        f"📉 EMA50: {s['ind']['ema50']}\n"
-        f"📊 RSI: {s['ind']['rsi']}\n"
-        f"📉 MACD: {s['ind']['macd']}\n\n"
-        f"🕒 Trend M5: {s['ind']['trend_m5']}\n"
-        f"🕒 Trend M15: {s['ind']['trend_m15']}\n"
-        f"🕒 Trend H1: {s['ind']['trend_h1']}\n\n"
+        f"Direzione: *{s['direction']}*\n"
+        f"Entry: *{s['entry']}*\n"
+        f"SL: *{s['sl']}*\n"
+        f"TP: *{s['tp']}*\n\n"
         f"{s['ai']}"
     )
 
     await update.message.reply_text(testo, parse_mode="Markdown")
-
 
 # =========================
 # /auto_ai
 # =========================
 async def auto_ai_job(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
-    stato = stato_mercato()
-
-    if stato == "chiuso":
-        await context.bot.send_message(chat_id, "📉 Mercato chiuso su XAUUSD.")
+    if stato_mercato() == "chiuso":
+        await context.bot.send_message(chat_id, "📉 Mercato chiuso.")
         return
 
     descr = descrizione_sessione()
     s = genera_segnale()
 
     testo = (
-        "🤖 *AI AUTO SIGNAL* (XAUUSD M5)\n"
+        "🤖 *AI AUTO SIGNAL*\n"
         f"{descr}\n\n"
-        f"📌 Direzione: *{s['direction']}* su *{s['symbol']}*\n"
-        f"➡️ Entry: *{s['entry']}*\n"
-        f"🛑 SL: *{s['sl']}* ({s['sl_pips']} pip)\n"
-        f"🎯 TP: *{s['tp']}* ({s['tp_pips']} pip)\n\n"
-        f"📈 EMA20: {s['ind']['ema20']}\n"
-        f"📉 EMA50: {s['ind']['ema50']}\n"
-        f"📊 RSI: {s['ind']['rsi']}\n"
-        f"📉 MACD: {s['ind']['macd']}\n\n"
-        f"🕒 Trend M5: {s['ind']['trend_m5']}\n"
-        f"🕒 Trend M15: {s['ind']['trend_m15']}\n"
-        f"🕒 Trend H1: {s['ind']['trend_h1']}\n\n"
+        f"Direzione: *{s['direction']}*\n"
+        f"Entry: *{s['entry']}*\n"
+        f"SL: *{s['sl']}*\n"
+        f"TP: *{s['tp']}*\n\n"
         f"{s['ai']}"
     )
 
     await context.bot.send_message(chat_id, testo, parse_mode="Markdown")
 
-
 async def auto_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
-
     for job in context.job_queue.jobs():
         if job.chat_id == chat_id:
             job.schedule_removal()
-
     context.job_queue.run_repeating(auto_ai_job, interval=AUTO_INTERVAL, first=1, chat_id=chat_id)
-
-    await update.message.reply_text("🤖 Auto-segnali XAUUSD con AI attivati! Ogni 5 minuti riceverai un segnale con analisi.")
-
+    await update.message.reply_text("🤖 Auto AI attivato!")
 
 # =========================
 # MAIN
@@ -465,7 +429,6 @@ def main():
     app.add_handler(CommandHandler("auto_ai", auto_ai))
 
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
