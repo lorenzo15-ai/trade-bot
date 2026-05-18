@@ -6,11 +6,12 @@ import os
 from datetime import datetime, time
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+from flask import Flask, request
 
 # =========================
 # 🔑 TOKEN
 # =========================
-BOT_TOKEN = "8809308845:AAFp5VJAXQ2DsRIICw2p3s7BaeRIIoluUTg"
+BOT_TOKEN = os.getenv "8809308845:AAFp5VJAXQ2DsRIICw2p3s7BaeRIIoluUTg"  # <-- Render lo prende da Environment
 
 # =========================
 # ⚙️ PARAMETRI BASE
@@ -88,7 +89,6 @@ def genera_indicatori():
     rsi_val = rsi(storico)
     macd_val = macd(storico)
 
-    # Trend basato su EMA reali
     if ema20 and ema50:
         if ema20 > ema50:
             trend = "uptrend"
@@ -155,13 +155,11 @@ def analisi_ai_completa(s):
 
     commenti = []
 
-    # TREND
     if ind["trend_m5"] == ind["trend_m15"] == ind["trend_h1"]:
         commenti.append("📈 Trend multi‑timeframe allineati.")
     else:
         commenti.append("⚠️ Trend non allineati.")
 
-    # EMA
     if ind["ema20"] > ind["ema50"] and direzione == "BUY":
         commenti.append("📊 EMA supportano BUY.")
     elif ind["ema20"] < ind["ema50"] and direzione == "SELL":
@@ -169,7 +167,6 @@ def analisi_ai_completa(s):
     else:
         commenti.append("⚠️ EMA non confermano.")
 
-    # RSI
     if ind["rsi"] < 30 and direzione == "BUY":
         commenti.append("🟢 RSI ipervenduto → BUY.")
     elif ind["rsi"] > 70 and direzione == "SELL":
@@ -177,7 +174,6 @@ def analisi_ai_completa(s):
     else:
         commenti.append("ℹ️ RSI neutro.")
 
-    # MACD
     if ind["macd"] > 0 and direzione == "BUY":
         commenti.append("📈 MACD rialzista.")
     elif ind["macd"] < 0 and direzione == "SELL":
@@ -185,7 +181,6 @@ def analisi_ai_completa(s):
     else:
         commenti.append("⚠️ MACD non conferma.")
 
-    # RISULTATO
     num_warning = len([c for c in commenti if c.startswith("⚠️")])
     num_pos = len([c for c in commenti if c.startswith("📈") or c.startswith("📊") or c.startswith("🟢")])
 
@@ -208,25 +203,20 @@ def genera_segnale():
     score_buy = 0
     score_sell = 0
 
-    # Trend
     if ind["trend_m5"] == "uptrend": score_buy += 2
     if ind["trend_m5"] == "downtrend": score_sell += 2
 
-    # EMA
     if ind["ema20"] > ind["ema50"]:
         score_buy += 2
     else:
         score_sell += 2
 
-    # RSI
     if ind["rsi"] < 30: score_buy += 1
     if ind["rsi"] > 70: score_sell += 1
 
-    # MACD
     if ind["macd"] > 0: score_buy += 1
     else: score_sell += 1
 
-    # Sentiment
     if sentiment == "bullish": score_buy += 2
     if sentiment == "bearish": score_sell += 2
 
@@ -416,19 +406,26 @@ async def auto_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🤖 Auto AI attivato!")
 
 # =========================
-# MAIN
+# MAIN (WEBHOOK PER RENDER)
 # =========================
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("auto", auto))
-    app.add_handler(CommandHandler("stop", stop))
-    app.add_handler(CommandHandler("calc", calc))
-    app.add_handler(CommandHandler("calc_ai", calc_ai))
-    app.add_handler(CommandHandler("auto_ai", auto_ai))
+server = Flask(__name__)
 
-    app.run_polling()
+@server.route("/")
+def home():
+    return "Bot attivo su Render!", 200
+
+@server.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), app.bot)
+    app.process_update(update)
+    return "OK", 200
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+
+    async def main():
+        await app.bot.set_webhook(f"{os.getenv('RENDER_EXTERNAL_URL')}/webhook/{BOT_TOKEN}")
+        server.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
+    asyncio.run(main())
