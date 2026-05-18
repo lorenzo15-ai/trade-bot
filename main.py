@@ -11,7 +11,7 @@ from flask import Flask, request
 # =========================
 # 🔑 TOKEN
 # =========================
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # <-- Render lo prende da Environment
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 # =========================
 # ⚙️ PARAMETRI BASE
@@ -406,9 +406,21 @@ async def auto_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🤖 Auto AI attivato!")
 
 # =========================
-# MAIN (WEBHOOK PER RENDER)
+# AVVIO BOT TELEGRAM
 # =========================
+app = Application.builder().token(BOT_TOKEN).build()
 
+# HANDLER COMANDI
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("auto", auto))
+app.add_handler(CommandHandler("stop", stop))
+app.add_handler(CommandHandler("calc", calc))
+app.add_handler(CommandHandler("calc_ai", calc_ai))
+app.add_handler(CommandHandler("auto_ai", auto_ai))
+
+# =========================
+# WEBHOOK SERVER (FLASK)
+# =========================
 server = Flask(__name__)
 
 @server.route("/")
@@ -418,9 +430,12 @@ def home():
 @server.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), app.bot)
-    app.process_update(update)
+    app.update_queue.put_nowait(update)
     return "OK", 200
 
+# =========================
+# MAIN
+# =========================
 if __name__ == "__main__":
     import asyncio
 
